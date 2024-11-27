@@ -107,6 +107,19 @@ extern "C" {
  */
 #define LV_VERSION_CHECK(x,y,z) (x == LVGL_VERSION_MAJOR && (y < LVGL_VERSION_MINOR || (y == LVGL_VERSION_MINOR && z <= LVGL_VERSION_PATCH)))
 
+#define LV_USE_PERF_MONITOR 1
+#if LV_USE_PERF_MONITOR
+    #define LV_USE_PERF_MONITOR_POS LV_ALIGN_BOTTOM_RIGHT
+#endif
+
+/*1: Show the used memory and the memory fragmentation
+ * Requires LV_MEM_CUSTOM = 0*/
+#define LV_USE_MEM_MONITOR 1
+#if LV_USE_MEM_MONITOR
+    #define LV_USE_MEM_MONITOR_POS LV_ALIGN_BOTTOM_LEFT
+#endif
+
+
 
 /*PNG decoder library*/
 #define LV_USE_PNG 1

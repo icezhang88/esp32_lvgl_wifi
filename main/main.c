@@ -34,279 +34,7 @@
 
 
 
-#ifdef CONFIG_ESP_DPP_LISTEN_CHANNEL
-#define EXAMPLE_DPP_LISTEN_CHANNEL_LIST     CONFIG_ESP_DPP_LISTEN_CHANNEL_LIST
-#else
-#define EXAMPLE_DPP_LISTEN_CHANNEL_LIST     "6"
-#endif
-
-#ifdef CONFIG_ESP_DPP_BOOTSTRAPPING_KEY
-#define EXAMPLE_DPP_BOOTSTRAPPING_KEY   CONFIG_ESP_DPP_BOOTSTRAPPING_KEY
-#else
-#define EXAMPLE_DPP_BOOTSTRAPPING_KEY   0
-#endif
-
-#ifdef CONFIG_ESP_DPP_DEVICE_INFO
-#define EXAMPLE_DPP_DEVICE_INFO      CONFIG_ESP_DPP_DEVICE_INFO
-#else
-#define EXAMPLE_DPP_DEVICE_INFO      0
-#endif
-
-#define CURVE_SEC256R1_PKEY_HEX_DIGITS     64
-
-static const char *WIFI_TAG = "wifi dpp-enrollee";
-wifi_config_t s_dpp_wifi_config;
-
-static int s_retry_num = 0;
-
-/* FreeRTOS event group to signal when we are connected*/
-static EventGroupHandle_t s_dpp_event_group;
-
-#define DPP_CONNECTED_BIT  BIT0
-#define DPP_CONNECT_FAIL_BIT     BIT1
-#define DPP_AUTH_FAIL_BIT           BIT2
-
-static int count=0;
-
-static void event_handler(void *arg, esp_event_base_t event_base,
-                          int32_t event_id, void *event_data)
-{
-    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
-        ESP_ERROR_CHECK(esp_supp_dpp_start_listen());
-        ESP_LOGI(WIFI_TAG, "Started listening for DPP Authentication");
-    } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
-        if (s_retry_num < 5) {
-            esp_wifi_connect();
-            s_retry_num++;
-            ESP_LOGI(WIFI_TAG, "retry to connect to the AP");
-        } else {
-            xEventGroupSetBits(s_dpp_event_group, DPP_CONNECT_FAIL_BIT);
-        }
-        ESP_LOGI(WIFI_TAG, "connect to the AP fail");
-    } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
-        ip_event_got_ip_t *event = (ip_event_got_ip_t *) event_data;
-        ESP_LOGI(WIFI_TAG, "got ip:" IPSTR, IP2STR(&event->ip_info.ip));
-        s_retry_num = 0;
-        xEventGroupSetBits(s_dpp_event_group, DPP_CONNECTED_BIT);
-    }
-}
-
-void dpp_enrollee_event_cb(esp_supp_dpp_event_t event, void *data)
-{
-    switch (event) {
-    case ESP_SUPP_DPP_URI_READY:
-        if (data != NULL) {
-            // esp_qrcode_config_t cfg = ESP_QRCODE_CONFIG_DEFAULT();
-
-            // ESP_LOGI(TAG, "Scan below QR Code to configure the enrollee:\n");
-            // esp_qrcode_generate(&cfg, (const char *)data);
-        }
-        break;
-    case ESP_SUPP_DPP_CFG_RECVD:
-        memcpy(&s_dpp_wifi_config, data, sizeof(s_dpp_wifi_config));
-        esp_wifi_set_config(ESP_IF_WIFI_STA, &s_dpp_wifi_config);
-        ESP_LOGI(WIFI_TAG, "DPP Authentication successful, connecting to AP : %s",
-                 s_dpp_wifi_config.sta.ssid);
-        s_retry_num = 0;
-        esp_wifi_connect();
-        break;
-    case ESP_SUPP_DPP_FAIL:
-        if (s_retry_num < 5) {
-            ESP_LOGI(WIFI_TAG, "DPP Auth failed (Reason: %s), retry...", esp_err_to_name((int)data));
-            ESP_ERROR_CHECK(esp_supp_dpp_start_listen());
-            s_retry_num++;
-        } else {
-            xEventGroupSetBits(s_dpp_event_group, DPP_AUTH_FAIL_BIT);
-        }
-        break;
-    default:
-        break;
-    }
-}
  
- 
-esp_err_t dpp_enrollee_bootstrap(void)
-{
-    esp_err_t ret;
-    const char *key = "303102010104201234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdefa00a06082a8648ce3d030107";
-    const char *device_info = "DPP Test Device";
-    const char *listen_channel = "6";
-                        
-    /* 使用固定参数生成二维码 */
-    ret = esp_supp_dpp_bootstrap_gen(listen_channel, DPP_BOOTSTRAP_QR_CODE,
-                                     key, device_info);
-
-    if (ret != ESP_OK) {
-        ESP_LOGE(WIFI_TAG, "Failed to generate DPP QR Code");
-    }
-
-    return ret;
-}
- 
- 
-static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data)
-{
-    //ESP_LOGD(TAG, "Event dispatched from event loop base=%s, event_id=%d", base, event_id);
-    esp_mqtt_event_handle_t event = event_data;
-    esp_mqtt_client_handle_t client = event->client;
-    int msg_id;
-    switch ((esp_mqtt_event_id_t)event_id) {
-    case MQTT_EVENT_CONNECTED:
-        //ESP_LOGI(TAG, "MQTT_EVENT_CONNECTED");
-        msg_id = esp_mqtt_client_publish(client, "/topic/qos1", "data_3", 0, 1, 0);
-       // ESP_LOGI(TAG, "sent publish successful, msg_id=%d", msg_id);
-
-        msg_id = esp_mqtt_client_subscribe(client, "/topic/qos0", 0);
-       // ESP_LOGI(TAG, "sent subscribe successful, msg_id=%d", msg_id);
-
-        msg_id = esp_mqtt_client_subscribe(client, "/topic/qos1", 1);
-        //ESP_LOGI(TAG, "sent subscribe successful, msg_id=%d", msg_id);
-
-        msg_id = esp_mqtt_client_unsubscribe(client, "/topic/qos1");
-       // ESP_LOGI(TAG, "sent unsubscribe successful, msg_id=%d", msg_id);
-        break;
-    case MQTT_EVENT_DISCONNECTED:
-        //ESP_LOGI(TAG, "MQTT_EVENT_DISCONNECTED");
-        break;
-
-    case MQTT_EVENT_SUBSCRIBED:
-       // ESP_LOGI(TAG, "MQTT_EVENT_SUBSCRIBED, msg_id=%d", event->msg_id);
-        msg_id = esp_mqtt_client_publish(client, "/topic/qos0", "data", 0, 0, 0);
-       // ESP_LOGI(TAG, "sent publish successful, msg_id=%d", msg_id);
-        break;
-    case MQTT_EVENT_UNSUBSCRIBED:
-        //ESP_LOGI(TAG, "MQTT_EVENT_UNSUBSCRIBED, msg_id=%d", event->msg_id);
-        break;
-    case MQTT_EVENT_PUBLISHED:
-        //ESP_LOGI(TAG, "MQTT_EVENT_PUBLISHED, msg_id=%d", event->msg_id);
-        break;
-    case MQTT_EVENT_DATA:
-       // ESP_LOGI(TAG, "MQTT_EVENT_DATA");
-        printf("TOPIC=%.*s\r\n", event->topic_len, event->topic);
-        printf("DATA=%.*s\r\n", event->data_len, event->data);
-        break;
-    case MQTT_EVENT_ERROR:
-        ESP_LOGI(WIFI_TAG, "MQTT_EVENT_ERROR");
-        if (event->error_handle->error_type == MQTT_ERROR_TYPE_TCP_TRANSPORT) {
-           
-            //ESP_LOGI(TAG, "Last errno string (%s)", strerror(event->error_handle->esp_transport_sock_errno));
-
-        }
-        break;
-    default:
-        //ESP_LOGI(TAG, "Other event id:%d", event->event_id);
-        break;
-    }
-}
-static esp_mqtt_client_handle_t client ;
-static void mqtt_app_start(void)
-{
-    esp_mqtt_client_config_t mqtt_cfg = {
-        //.broker.address.uri = "tcp://sensor.bodyta.com:1883",
-        //.broker.address.hostname="mqtt://broker.emqx.io",
-        //.broker.address.port=1883,
-        .broker.address.uri="mqtt://sensor.bodyta.com:1883"
-         
-    };
-
-
-    client = esp_mqtt_client_init(&mqtt_cfg);
-    /* The last argument may be used to pass data to the event handler, in this example mqtt_event_handler */
-    esp_mqtt_client_register_event(client, ESP_EVENT_ANY_ID, mqtt_event_handler, NULL);
-    esp_mqtt_client_start(client);
-    
-}
-void wifi_signal_monitor_task(void *pvParameters)
-{
-    while (1) {
-        wifi_ap_record_t ap_info;
-        if (esp_wifi_sta_get_ap_info(&ap_info) == ESP_OK) {
-            ESP_LOGI(WIFI_TAG, "Current RSSI: %d dBm", ap_info.rssi);
-             
-             //esp_mqtt_client_publish(client, "/topic/qos1", "data_3", 0, 1, 0);
-
-                cJSON *root = cJSON_CreateObject();
-
-                // 向 JSON 对象添加数据
-                cJSON_AddNumberToObject(root, "rssi",ap_info.rssi);
-                cJSON_AddNumberToObject(root, "count", count);
-                cJSON *array = cJSON_CreateArray();
-                for (int i = 0; i < 1024; i++) {
-                    cJSON_AddItemToArray(array, cJSON_CreateNumber(count%8)); // 添加数字元素
-                }
-
-            // 将数组添加到 JSON 对象
-             cJSON_AddItemToObject(root, "large_array", array);
-                //cJSON_AddBoolToObject(root, "status", true);
-
-                // 将 JSON 对象转换为字符串
-              
-                char *json_str = cJSON_PrintUnformatted(root); // 不带格式化输出
-                 
-                size_t json_object_size = strlen(json_str);
-                esp_mqtt_client_publish(client, "/topic/qos1",json_str,json_object_size,1,0);
-                //cJSON_free(root);
-                free(json_str); 
-                cJSON_Delete(root);  // 释放内存
-
-        }
-        count++;
-        vTaskDelay(pdMS_TO_TICKS(1500)); // 每 5 秒获取一次信号强度
-    }
-}
-void dpp_enrollee_init(void)
-{
-    s_dpp_event_group = xEventGroupCreate();
-
-    ESP_ERROR_CHECK(esp_netif_init());
-
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
-    esp_netif_create_default_wifi_sta();
-
-    ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &event_handler, NULL));
-    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &event_handler, NULL));
-
-    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
-
-    ESP_ERROR_CHECK(esp_supp_dpp_init(dpp_enrollee_event_cb));
-    ESP_ERROR_CHECK(dpp_enrollee_bootstrap());
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-    ESP_ERROR_CHECK(esp_wifi_start());
-
-    /* Waiting until either the connection is established (WIFI_CONNECTED_BIT) or connection failed for the maximum
-     * number of re-tries (WIFI_FAIL_BIT). The bits are set by event_handler() (see above) */
-    EventBits_t bits = xEventGroupWaitBits(s_dpp_event_group,
-                                           DPP_CONNECTED_BIT | DPP_CONNECT_FAIL_BIT | DPP_AUTH_FAIL_BIT,
-                                           pdFALSE,
-                                           pdFALSE,
-                                           portMAX_DELAY);
-
-    /* xEventGroupWaitBits() returns the bits before the call returned, hence we can test which event actually
-     * happened. */
-    if (bits & DPP_CONNECTED_BIT) {
-        ESP_LOGI(WIFI_TAG, "connected to ap SSID:%s password:%s",s_dpp_wifi_config.sta.ssid, s_dpp_wifi_config.sta.password);
-       
-        // mqtt_app_start();
-      
-        // xTaskCreate(wifi_signal_monitor_task, "wifi_signal_monitor_task", 4096, NULL, 5, NULL);
-
-
-    } else if (bits & DPP_CONNECT_FAIL_BIT) {
-        ESP_LOGI(WIFI_TAG, "Failed to connect to SSID:%s, password:%s",
-                 s_dpp_wifi_config.sta.ssid, s_dpp_wifi_config.sta.password);
-    } else if (bits & DPP_AUTH_FAIL_BIT) {
-        ESP_LOGI(WIFI_TAG, "DPP Authentication failed after %d retries", s_retry_num);
-    } else {
-        ESP_LOGE(WIFI_TAG, "UNEXPECTED EVENT");
-    }
-
-    esp_supp_dpp_deinit();
-    ESP_ERROR_CHECK(esp_event_handler_unregister(IP_EVENT, IP_EVENT_STA_GOT_IP, &event_handler));
-    ESP_ERROR_CHECK(esp_event_handler_unregister(WIFI_EVENT, ESP_EVENT_ANY_ID, &event_handler));
-    vEventGroupDelete(s_dpp_event_group);
-}
-
  
 
 static const char *TAG = "small_tv";
@@ -500,7 +228,43 @@ void lvgl_demo_ui(lv_disp_t *disp)
     test();
      
 }
+static void ta_event_cb(lv_event_t * e)
+{
+    lv_event_code_t code = lv_event_get_code(e);
+    lv_obj_t * ta = lv_event_get_target(e);
+    lv_obj_t * kb = lv_event_get_user_data(e);
+    if(code == LV_EVENT_FOCUSED) {
+        lv_keyboard_set_textarea(kb, ta);
+        lv_obj_clear_flag(kb, LV_OBJ_FLAG_HIDDEN);
+    }
 
+    if(code == LV_EVENT_DEFOCUSED) {
+        lv_keyboard_set_textarea(kb, NULL);
+        lv_obj_add_flag(kb, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+void lv_example_keyboard_1(void)
+{
+    /*Create a keyboard to use it with an of the text areas*/
+    lv_obj_t * kb = lv_keyboard_create(lv_scr_act());
+
+    /*Create a text area. The keyboard will write here*/
+    lv_obj_t * ta;
+    ta = lv_textarea_create(lv_scr_act());
+    lv_obj_align(ta, LV_ALIGN_TOP_MID, 10, 10);
+    lv_obj_add_event_cb(ta, ta_event_cb, LV_EVENT_ALL, kb);
+    lv_textarea_set_placeholder_text(ta, "Hello");
+    lv_obj_set_size(ta, 140, 80);
+
+    // ta = lv_textarea_create(lv_scr_act());
+    // lv_obj_align(ta, LV_ALIGN_TOP_RIGHT, -10, 10);
+    // lv_obj_add_event_cb(ta, ta_event_cb, LV_EVENT_ALL, kb);
+    // lv_obj_set_size(ta, 140, 80);
+
+    lv_keyboard_set_textarea(kb, NULL);
+    lv_keyboard_set_mode(kb,LV_KEYBOARD_MODE_NUMBER);
+}
 void app_main(void)
 {
 
@@ -587,9 +351,9 @@ void app_main(void)
     // alloc draw buffers used by LVGL
     // it's recommended to choose the size of the draw buffer(s) to be at least 1/10 screen sized
     lv_color_t *buf1 = heap_caps_malloc(LCD_V_RES * LCD_H_RES * sizeof(lv_color_t), MALLOC_CAP_DMA);
-    assert(buf1);
+    //assert(buf1);
     lv_color_t *buf2 = heap_caps_malloc(LCD_V_RES * LCD_H_RES * sizeof(lv_color_t), MALLOC_CAP_DMA);
-    assert(buf2);
+    //assert(buf2);
     // initialize LVGL draw buffers
     lv_disp_draw_buf_init(&disp_buf, buf1, buf2, LCD_V_RES * LCD_H_RES);
 
@@ -625,8 +389,8 @@ void app_main(void)
     lv_indev_drv_register(&indev_drv);
 
     ESP_LOGI(TAG, "Display LVGL");
-    lvgl_demo_ui(disp);
-    dpp_enrollee_init();
+    //lvgl_demo_ui(disp);
+    lv_example_keyboard_1();
 
     while (1) {
         // raise the task priority of LVGL and/or reduce the handler period can improve the performance
